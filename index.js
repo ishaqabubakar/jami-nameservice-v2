@@ -19,6 +19,8 @@
  */
 'use strict';
 
+require('dotenv').config();
+
 const express = require('express');
 const bodyParser = require('body-parser');
 const BigNumber = require('bignumber.js');
@@ -26,7 +28,7 @@ const fs = require('fs');
 const http = require('http');
 const https = require('https');
 const Web3 = require('web3');
-const web3 = new Web3();
+const web3 = new Web3(process.env.RPC_URL || 'http://localhost:8545');
 const argv = require('minimist')(process.argv.slice(2));
 const crypto = require('crypto');
 const path = require('path');
@@ -70,8 +72,10 @@ Object.getPrototypeOf(web3.eth).awaitConsensus = function(txhash, mined_cb) {
     });
 }
 
+// console.log('Loading...');
+// web3.setProvider(new web3.providers.HttpProvider('http://localhost:8545'));
+
 console.log('Loading...');
-web3.setProvider(new web3.providers.HttpProvider('http://localhost:8545'));
 
 const REG_FILE = __dirname + "/contract/registrar.out.json";
 const REG_ADDR_FILE = __dirname + "/contractAddress.txt";

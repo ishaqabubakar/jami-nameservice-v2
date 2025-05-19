@@ -1,17 +1,30 @@
 {
-  "name": "ringns",
-  "version": "1.0.0",
-  "description": "Ring name service",
-  "main": "index.js",
-  "keywords": [],
-  "author": "Adrien Béraud <adrien.beraud@savoirfairelinux.com>",
-  "license": "GPL-3.0",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "compile": "hardhat compile",
+    "deploy": "hardhat run scripts/deploy.js --network $NETWORK",
+    "test": "hardhat test"
+  },
   "dependencies": {
-    "async": "^2.6.1",
-    "bignumber.js": ">=2.0.0",
-    "body-parser": ">=1.8.1",
-    "express": ">=4.1.0",
-    "minimist": ">=1.0.0",
-    "web3": ">=0.15"
+    "async": "^3.2.6",
+    "bignumber.js": "^9.3.0",
+    "body-parser": "^2.2.0",
+    "dotenv": "^16.4.3",
+    "ethers": "^6.10.0",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.0.0",
+    "helmet": "^7.1.0",
+    "minimist": "^1.2.8",
+    "web3": "^4.16.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "hardhat": "^0.0.7",
+    "nodemon": "^3.0.3"
   }
 }
