@@ -1,19 +1,16 @@
 {
   "language": "Solidity",
   "sources": {
-    "registrar": {
-      "urls":["registrar.sol"]
+    "registrar.sol": {
+      "content": "// SPDX-License-Identifier: GPL-3.0\npragma solidity ^0.6.12; …"
     }
   },
   "settings": {
-    "optimizer": {
-      "enabled": true,
-      "runs": 500
-    },
+    "optimizer": { "enabled": true, "runs": 200 },
     "outputSelection": {
-        "*": {
-          "*": [ "abi", "evm.bytecode" ]
-        }
+      "*": {
+        "*": [ "abi", "evm.bytecode" ]
       }
+    }
   }
 }

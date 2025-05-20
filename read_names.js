@@ -21,11 +21,8 @@
 require('dotenv').config();
 
 const fs = require('fs');
-const Web3 = require('web3');
-const { RPC_URL = 'http://localhost:8545' } = process.env;
-
-// ① Single Web3 instantiation
-const web3 = new Web3(RPC_URL);
+const { Web3 } = require('web3');
+const web3    = new Web3(process.env.RPC_URL || 'http://localhost:8545');
 
 const REG_ADDR_FILE     = "contractAddress.txt";
 const REG_ABI_reserveFor = ['bytes32','address','address','string','string'];

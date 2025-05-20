@@ -11,12 +11,8 @@ const async      = require('async');
 const BigNumber  = require('bignumber.js');
 const fs         = require('fs');
 const path       = require('path');
-const minimist   = require('minimist');
-const Web3       = require('web3');
-
-/* ───────────── 1 . WEB3 INITIALISATION ────────────────────────────────── */
-const RPC_URL = process.env.RPC_URL || 'http://localhost:8545';
-const web3    = new Web3(RPC_URL);
+const minimist   = require('minimist');const { Web3 } = require('web3');
+const web3    = new Web3(process.env.RPC_URL || 'http://localhost:8545');
 
 /* legacy helper kept, rewritten for Web3 v4 */
 Object.getPrototypeOf(web3.eth).awaitConsensus = function (txHash, done) {

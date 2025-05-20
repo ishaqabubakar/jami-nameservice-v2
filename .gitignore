@@ -1,1 +1,10 @@
-node_modules
+# macOS cruft
+.DS_Store
+
+# node
+node_modules/
+npm-debug.log*
+.env
+
+# compiled contract artefacts
+contract/*.out.json
