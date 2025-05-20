@@ -49,9 +49,20 @@ function verifySignature(name, pub, sig) {
   return verifier.verify(publicKey, sig, 'base64');
 }
 
-const formatName   = n  => '0x' + Buffer.from(n, 'utf8').toString('hex');
-const isHashZero   = h  => !h || /^0x0*$/.test(h);
-const parseString  = s  => (s ? web3.utils.hexToUtf8(s) : s);
+/* ---------- name ⇄ bytes32 helpers (32-byte padding) ------------------ */
+const pad32   = hex => '0x' + hex.replace(/^0x/, '').padEnd(64, '0');
+const unpad32 = hex => hex.replace(/^0x/, '').replace(/(00)+$/, '');
+
+function formatName(n) {                      // encode & right-pad
+  return pad32(web3.utils.utf8ToHex(n));
+}
+function parseString(hex) {                   // decode & trim zeros
+  const raw = unpad32(hex);
+  return raw ? web3.utils.hexToUtf8('0x' + raw) : '';
+}
+
+const isHashZero = h => !h || /^0x0*$/.test(h);   // keep as-is
+
 
 function formatAddress(a) {
   if (!a) return;
