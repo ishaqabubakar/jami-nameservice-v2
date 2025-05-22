@@ -152,7 +152,7 @@ async function deployRegistrar(onReady) {
   console.log('Deploying new registrar…');
   reg = await factory
     .deploy({ data: '0x' + regData.evm.bytecode.object })
-    .send({ from: coinbase, gas: 1_000_000 });
+    .send({ from: coinbase, gas: 5_000_000 });
   regAddress = reg.options.address;
   fs.writeFileSync(REG_ADDR_FILE, regAddress);
   console.log('Registrar deployed at', regAddress);
