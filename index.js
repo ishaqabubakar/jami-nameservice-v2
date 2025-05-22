@@ -39,13 +39,6 @@ db.run(`
   )
 `);
 
-// ────────────────────────────────────────────────────────────────────────────
-//  DHT bootstrap (so your API can share the same node)
-// ────────────────────────────────────────────────────────────────────────────
-const [ dhtHost, dhtPort ] = (process.env.DHT_BOOT || '127.0.0.1:4222').split(':');
-const dht = new DHT.Node({ port: Number(dhtPort) });
-dht.bootstrap([ `${dhtHost}:${dhtPort}` ]);
-console.log(`DHT client bootstrapped on ${dhtHost}:${dhtPort}`);
 
 // ────────────────────────────────────────────────────────────────────────────
 //  Constants & helpers
