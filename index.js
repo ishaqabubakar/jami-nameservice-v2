@@ -132,7 +132,7 @@ async function deployRegistrar(onReady) {
   /* reuse existing */
   if (fs.existsSync(REG_ADDR_FILE)) {
     regAddress = fs.readFileSync(REG_ADDR_FILE, 'utf8').trim();
-    const code = await web3.eth.getCode(regAddress);
+    const code = await web3.eth.getCode(regAddress, 'latest');
     if (code && code !== '0x') {
       reg = factory;
       reg.options.address = regAddress;
@@ -323,7 +323,7 @@ function startServer() {
 
     const accounts = await web3.eth.getAccounts();
     coinbase = accounts[0];
-    balance  = await web3.eth.getBalance(coinbase);
+    balance  = await web3.eth.getBalance(coinbase, 'latest');
 
     console.log('Coinbase:', coinbase);
     console.log('Balance :', web3.utils.fromWei(balance, 'ether'), 'ETH');
