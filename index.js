@@ -10,22 +10,44 @@ const BigNumber  = require('bignumber.js');
 const fs         = require('fs');
 const http       = require('http');
 const https      = require('https');
-const { Web3 }   = require('web3');
-const web3       = new Web3(process.env.RPC_URL || 'http://localhost:8545');
-const argv       = require('minimist')(process.argv.slice(2));
-const crypto     = require('crypto');
 const path       = require('path');
+const crypto     = require('crypto');
+const argv       = require('minimist')(process.argv.slice(2));
+const { Web3 }   = require('web3');
 
-/* ------------------------------------------------------------------ *
- *  CONSTANTS / HELPERS                                               *
- * ------------------------------------------------------------------ */
+// ────────────────────────────────────────────────────────────────────────────
+//  Web3 + RPC setup
+// ────────────────────────────────────────────────────────────────────────────
+const web3 = new Web3(process.env.RPC_URL || 'http://localhost:8545');
 
+// ────────────────────────────────────────────────────────────────────────────
+//  SQLite integration
+// ────────────────────────────────────────────────────────────────────────────
+const sqlite3 = require('sqlite3').verbose();
+const dbPath  = path.join(__dirname, 'nameserver.db');
+const db      = new sqlite3.Database(dbPath,
+  sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE,
+  err => { if (err) console.error('DB open error:', err); }
+);
+db.run(`
+  CREATE TABLE IF NOT EXISTS names (
+    name       TEXT PRIMARY KEY,
+    addr       TEXT,
+    owner      TEXT,
+    publickey  TEXT,
+    signature  TEXT
+  )
+`);
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Constants & helpers
+// ────────────────────────────────────────────────────────────────────────────
 const REG_FILE       = path.join(__dirname, 'contract', 'registrar.out.json');
 const REG_ADDR_FILE  = path.join(__dirname, 'contractAddress.txt');
 const NAME_VALIDATOR = /^[a-z0-9-_]{3,32}$/;
 
-const cache     = {};   // name  ⇒ { name, addr, … }
-const addrCache = {};   // addr  ⇒ { name, addr, … }
+const cache     = {};   // in-memory cache: name ⇒ record
+const addrCache = {};   // in-memory cache: addr ⇒ record
 
 function validateFile(f) {
   if (path.isAbsolute(f) && fs.existsSync(f))        return f;
@@ -49,20 +71,15 @@ function verifySignature(name, pub, sig) {
   return verifier.verify(publicKey, sig, 'base64');
 }
 
-/* ---------- name ⇄ bytes32 helpers (32-byte padding) ------------------ */
 const pad32   = hex => '0x' + hex.replace(/^0x/, '').padEnd(64, '0');
 const unpad32 = hex => hex.replace(/^0x/, '').replace(/(00)+$/, '');
 
-function formatName(n) {                      // encode & right-pad
-  return pad32(web3.utils.utf8ToHex(n));
-}
-function parseString(hex) {                   // decode & trim zeros
+function formatName(n)  { return pad32(web3.utils.utf8ToHex(n)); }
+function parseString(hex) {
   const raw = unpad32(hex);
   return raw ? web3.utils.hexToUtf8('0x' + raw) : '';
 }
-
-const isHashZero = h => !h || /^0x0*$/.test(h);   // keep as-is
-
+const isHashZero = h => !h || /^0x0*$/.test(h);
 
 function formatAddress(a) {
   if (!a) return;
@@ -73,9 +90,9 @@ function formatAddress(a) {
   return s.toLowerCase();
 }
 
-/* ------------------------------------------------------------------ *
- *  AWAIT CONSENSUS helper (polling)                                   *
- * ------------------------------------------------------------------ */
+// ────────────────────────────────────────────────────────────────────────────
+//  Consensus helper (polling)
+// ────────────────────────────────────────────────────────────────────────────
 web3.eth.awaitConsensus = async (txHash, cb, tries = 12) => {
   const poll = async () => {
     try {
@@ -88,30 +105,38 @@ web3.eth.awaitConsensus = async (txHash, cb, tries = 12) => {
   poll();
 };
 
-/* ------------------------------------------------------------------ *
- *  REGISTRAR BOOTSTRAP                                               *
- * ------------------------------------------------------------------ */
+// ────────────────────────────────────────────────────────────────────────────
+//  Registrar bootstrap
+// ────────────────────────────────────────────────────────────────────────────
 let coinbase, balance, regAddress = '0x0', regData, reg;
 
 async function deployRegistrar(onReady) {
-  /* walk json & take the first object holding both abi + evm.bytecode */
-  const compiled = JSON.parse(fs.readFileSync(REG_FILE, 'utf8'));
-  const find = n =>
-    n && typeof n === 'object'
-      ? (n.abi && n.evm && n.evm.bytecode ? n
-         : Object.values(n).reduce((r, v) => r || find(v), null))
+  let compiled;
+  try {
+    compiled = JSON.parse(fs.readFileSync(REG_FILE, 'utf8'));
+  } catch (e) {
+    console.error(`⛔ could not read/parse ${REG_FILE}:`, e);
+    process.exit(1);
+  }
+
+  // Your JSON has a top-level "contracts" key; dig down to the first item
+  const find = obj =>
+    obj && typeof obj === 'object'
+      ? (obj.abi && obj.bin)
+          ? { abi: JSON.parse(obj.abi), evm: { bytecode: { object: obj.bin }} }
+          : Object.values(obj).reduce((acc, v) => acc || find(v), null)
       : null;
 
-  regData = find(compiled);
+  // compiled.contracts is where solcjs puts everything
+  const flat = compiled.contracts || compiled;
+  regData = find(flat);
   if (!regData) {
-    console.error('\n⚠️  No contract ABI / byte-code found in', REG_FILE,
-                  '\n   Re-compile your Solidity 0.6 contract.\n');
+    console.error(`\n⚠️  No contract ABI + bytecode found in ${REG_FILE}\n   (re-compile your Solidity contract)\n`);
     process.exit(1);
   }
 
   const factory = new web3.eth.Contract(regData.abi);
 
-  /* 1️⃣  reuse */
   if (fs.existsSync(REG_ADDR_FILE)) {
     regAddress = fs.readFileSync(REG_ADDR_FILE, 'utf8').trim();
     const code = await web3.eth.getCode(regAddress);
@@ -124,19 +149,19 @@ async function deployRegistrar(onReady) {
     }
   }
 
-  /* 2️⃣  deploy */
   console.log('Deploying new registrar…');
-  reg = await factory.deploy({ data: '0x' + regData.evm.bytecode.object })
-                      .send({ from: coinbase, gas: 1_000_000 });
+  reg = await factory
+    .deploy({ data: '0x' + regData.evm.bytecode.object })
+    .send({ from: coinbase, gas: 1_000_000 });
   regAddress = reg.options.address;
   fs.writeFileSync(REG_ADDR_FILE, regAddress);
   console.log('Registrar deployed at', regAddress);
   onReady();
 }
 
-/* ------------------------------------------------------------------ *
- *  EXPRESS SERVER – routes identical in spirit to original           *
- * ------------------------------------------------------------------ */
+// ────────────────────────────────────────────────────────────────────────────
+//  HTTP server + routes
+// ────────────────────────────────────────────────────────────────────────────
 function startServer() {
   console.log('Starting HTTP server …');
   const app = express();
@@ -144,75 +169,95 @@ function startServer() {
   app.use(bodyParser.json());
   app.use((_, res, next) => { res.type('json'); next(); });
 
-  /* ---------- LOOK-UP ROUTES ---------- */
+  // GET /name/:name
+  app.get('/name/:name', (req, res) => {
+    db.get(
+      `SELECT name, addr, owner, publickey, signature
+         FROM names WHERE name = ?`,
+      [req.params.name],
+      (err, row) => {
+        if (err) console.error('DB lookup error:', err);
+        if (row) return res.json(row);
 
-  app.get('/name/:name', async (req, res) => {
-    try {
-      const hex = formatName(req.params.name);
-      const addr = await reg.methods.addr(hex).call();
-      if (isHashZero(addr)) {
-        const cached = cache[req.params.name];
-        return cached
-          ? res.json(cached)
-          : res.status(404).json({ error: 'name not registered' });
+        (async () => {
+          try {
+            const hex  = formatName(req.params.name);
+            const addr = await reg.methods.addr(hex).call();
+            if (isHashZero(addr)) {
+              const c = cache[req.params.name];
+              return c
+                ? res.json(c)
+                : res.status(404).json({ error: 'name not registered' });
+            }
+            const pub = await reg.methods.publickey(hex).call();
+            const sig = await reg.methods.signature(hex).call();
+            const obj = isHashZero(pub)
+              ? { name: req.params.name, addr }
+              : { name: req.params.name, addr, publickey: pub, signature: sig };
+            cache[req.params.name] = obj;
+            addrCache[addr]        = obj;
+            res.json(obj);
+          } catch (e) {
+            console.error(e);
+            res.status(500).json({ error: 'server error' });
+          }
+        })();
       }
-
-      const pub = await reg.methods.publickey(hex).call();
-      const sig = await reg.methods.signature(hex).call();
-      const obj = isHashZero(pub)
-        ? { name: req.params.name, addr }
-        : { name: req.params.name, addr, publickey: pub, signature: sig };
-
-      cache[req.params.name] = obj;
-      addrCache[addr]        = obj;
-      res.json(obj);
-    } catch (e) { console.error(e); res.status(500).json({ error: 'server error' }); }
+    );
   });
 
+  // GET /name/:name/publickey
   app.get('/name/:name/publickey', async (req, res) => {
     try {
       const pub = await reg.methods.publickey(formatName(req.params.name)).call();
-      if (isHashZero(pub))
-        return res.status(404).json({ error: 'name not registered' });
+      if (isHashZero(pub)) return res.status(404).json({ error: 'name not registered' });
       res.json({ name: req.params.name, publickey: pub });
-    } catch (e) { console.error(e); res.status(500).json({ error: 'server error' }); }
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: 'server error' });
+    }
   });
 
+  // GET /name/:name/signature
   app.get('/name/:name/signature', async (req, res) => {
     try {
       const sig = await reg.methods.signature(formatName(req.params.name)).call();
-      if (isHashZero(sig))
-        return res.status(404).json({ error: 'name not registered' });
+      if (isHashZero(sig)) return res.status(404).json({ error: 'name not registered' });
       res.json({ name: req.params.name, signature: sig });
-    } catch (e) { console.error(e); res.status(500).json({ error: 'server error' }); }
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: 'server error' });
+    }
   });
 
+  // GET /name/:name/owner
   app.get('/name/:name/owner', async (req, res) => {
     try {
-      const owner = await reg.methods.owner(req.params.name).call();
-      if (isHashZero(owner))
-        return res.status(404).json({ error: 'name not registered' });
+      const owner = await reg.methods.owner(formatName(req.params.name)).call();
+      if (isHashZero(owner)) return res.status(404).json({ error: 'name not registered' });
       res.json({ name: req.params.name, owner });
-    } catch (e) { console.error(e); res.status(500).json({ error: 'server error' }); }
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: 'server error' });
+    }
   });
 
+  // GET /addr/:addr
   app.get('/addr/:addr', async (req, res) => {
     try {
-      const addr = formatAddress(req.params.addr);
-      if (!addr) return res.status(400).json({ success: false });
-      const nameHex = await reg.methods.name(addr).call();
-      if (!isHashZero(nameHex))
-        return res.json({ name: parseString(nameHex) });
-
-      const cached = addrCache[addr];
-      cached
-        ? res.json(cached)
-        : res.status(404).json({ error: 'address not registered' });
-    } catch (e) { console.error(e); res.status(500).json({ error: 'server error' }); }
+      const a = formatAddress(req.params.addr);
+      if (!a) return res.status(400).json({ success: false });
+      const hex = await reg.methods.name(a).call();
+      if (!isHashZero(hex)) return res.json({ name: parseString(hex) });
+      const c = addrCache[a];
+      c ? res.json(c) : res.status(404).json({ error: 'address not registered' });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: 'server error' });
+    }
   });
 
-  /* ---------- REGISTRATION ROUTE ---------- */
-
+  // POST /name/:name
   app.post('/name/:name', async (req, res) => {
     try {
       const name  = req.params.name;
@@ -226,7 +271,6 @@ function startServer() {
       if (cache[name])
         return res.status(400).json({ success: false, error: 'name already registered' });
 
-      /* optional pub-key / signature */
       let publickey = '0x0', signature = '0x0';
       if (req.body.publickey || req.body.signature) {
         if (!req.body.publickey || !req.body.signature)
@@ -237,31 +281,38 @@ function startServer() {
         signature = req.body.signature;
       }
 
-      const taken = !(await reg.methods.owner(name).call()).match(/^0x0*$/);
+      const taken = !(await reg.methods.owner(formatName(name)).call()).match(/^0x0*$/);
       if (taken)
         return res.status(403).json({ success: false, error: 'name already owned' });
 
       console.log(`Registering ${name} → ${addr}`);
-
       const tx = await reg.methods.reserveFor(
-        formatName(name),
-        owner,
-        addr,
-        publickey,
-        signature
+        formatName(name), owner, addr, publickey, signature
       ).send({ from: coinbase, gas: 3_000_000 });
 
       const obj = { name, addr, publickey, signature };
-      cache[name]    = obj;
-      addrCache[addr]= obj;
+      cache[name]     = obj;
+      addrCache[addr] = obj;
 
       res.json({ success: true, tx: tx.transactionHash });
-    } catch (e) { console.error(e); res.status(500).json({ error: 'server error' }); }
+
+      db.run(
+        `INSERT OR REPLACE INTO names
+           (name, addr, owner, publickey, signature)
+         VALUES (?, ?, ?, ?, ?)`,
+        [name, addr, owner, publickey, signature],
+        err => { if (err) console.error('DB insert error:', err); }
+      );
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: 'server error' });
+    }
   });
 
-  /* ---------- LISTENERS ---------- */
-
-  http.createServer(app).listen(8080, () => console.log('HTTP  :8080 ready'));
+  // start HTTP (and optional HTTPS)
+  http.createServer(app).listen(process.env.PORT || 8080, () =>
+    console.log(`HTTP  :${process.env.PORT||8080} ready`)
+  );
   if (argv.https) {
     try {
       const opts = {
@@ -272,22 +323,24 @@ function startServer() {
                .filter(Boolean)
                .map(c => c + '\n-----END CERTIFICATE-----')
       };
-      https.createServer(opts, app).listen(443, () => console.log('HTTPS :443  ready'));
-    } catch (e) { console.error('HTTPS error:', e); }
+      https.createServer(opts, app).listen(443, () =>
+        console.log('HTTPS :443 ready')
+      );
+    } catch (e) {
+      console.error('HTTPS error:', e);
+    }
   }
 }
 
-/* ------------------------------------------------------------------ *
- *  MAIN  (async bootstrap)                                            *
- * ------------------------------------------------------------------ */
+// ────────────────────────────────────────────────────────────────────────────
+//  Main (bootstrap + startServer)
+// ────────────────────────────────────────────────────────────────────────────
 (async () => {
   try {
     console.log('Loading…');
-
     const accounts = await web3.eth.getAccounts();
     coinbase = accounts[0];
     balance  = await web3.eth.getBalance(coinbase);
-
     console.log('Coinbase:', coinbase);
     console.log('Balance :', web3.utils.fromWei(balance, 'ether'), 'ETH');
 

@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "compile": "npx solcjs --optimize --combined-json abi,bin ./contract/registrar.sol -o ./contract",
+    "compile": "hardhat compile",
     "deploy": "hardhat run scripts/deploy.js --network $NETWORK",
     "test": "hardhat test"
   },
