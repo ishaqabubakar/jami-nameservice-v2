@@ -14,7 +14,6 @@ const path       = require('path');
 const crypto     = require('crypto');
 const argv       = require('minimist')(process.argv.slice(2));
 const { Web3 }   = require('web3');
-const DHT        = require('opendht'); // make sure opendht is installed
 
 // ────────────────────────────────────────────────────────────────────────────
 //  Web3 + RPC setup
