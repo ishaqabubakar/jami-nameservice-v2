@@ -20,11 +20,11 @@ const path       = require('path');
 /* SQLite integration                                                         */
 const sqlite3 = require('sqlite3').verbose();
 const dbPath  = path.join(__dirname, 'nameserver.db');
-const db      = new sqlite3.Database(dbPath,
+const db      = new sqlite3.Database(
+  dbPath,
   sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE,
   err => { if (err) console.error('DB open error:', err); }
 );
-// Create table if missing
 db.run(`
   CREATE TABLE IF NOT EXISTS names (
     name       TEXT PRIMARY KEY,
@@ -39,7 +39,6 @@ db.run(`
 /* ------------------------------------------------------------------ *
  *  CONSTANTS / HELPERS                                               *
  * ------------------------------------------------------------------ */
-
 const REG_FILE       = path.join(__dirname, 'contract', 'registrar.out.json');
 const REG_ADDR_FILE  = path.join(__dirname, 'contractAddress.txt');
 const NAME_VALIDATOR = /^[a-z0-9-_]{3,32}$/;
@@ -73,10 +72,8 @@ function verifySignature(name, pub, sig) {
 const pad32   = hex => '0x' + hex.replace(/^0x/, '').padEnd(64, '0');
 const unpad32 = hex => hex.replace(/^0x/, '').replace(/(00)+$/, '');
 
-function formatName(n) {                      // encode & right-pad
-  return pad32(web3.utils.utf8ToHex(n));
-}
-function parseString(hex) {                   // decode & trim zeros
+function formatName(n) { return pad32(web3.utils.utf8ToHex(n)); }
+function parseString(hex) {
   const raw = unpad32(hex);
   return raw ? web3.utils.hexToUtf8('0x' + raw) : '';
 }
@@ -116,7 +113,8 @@ async function deployRegistrar(onReady) {
   const compiled = JSON.parse(fs.readFileSync(REG_FILE, 'utf8'));
   const find = n =>
     n && typeof n === 'object'
-      ? (n.abi && n.evm && n.evm.bytecode ? n
+      ? (n.abi && n.evm && n.evm.bytecode
+         ? n
          : Object.values(n).reduce((r, v) => r || find(v), null))
       : null;
 
@@ -129,7 +127,7 @@ async function deployRegistrar(onReady) {
 
   const factory = new web3.eth.Contract(regData.abi);
 
-  /* reuse existing */
+  /* 1️⃣  reuse existing */
   if (fs.existsSync(REG_ADDR_FILE)) {
     regAddress = fs.readFileSync(REG_ADDR_FILE, 'utf8').trim();
     const code = await web3.eth.getCode(regAddress, 'latest');
@@ -142,10 +140,11 @@ async function deployRegistrar(onReady) {
     }
   }
 
-  /* deploy new */
+  /* 2️⃣  deploy new */
   console.log('Deploying new registrar…');
-  reg = await factory.deploy({ data: '0x' + regData.evm.bytecode.object })
-                      .send({ from: coinbase, gas: 1_000_000 });
+  reg = await factory
+    .deploy({ data: '0x' + regData.evm.bytecode.object })
+    .send({ from: coinbase, gas: 1_000_000 });
   regAddress = reg.options.address;
   fs.writeFileSync(REG_ADDR_FILE, regAddress);
   console.log('Registrar deployed at', regAddress);
@@ -162,29 +161,31 @@ function startServer() {
   app.use(bodyParser.json());
   app.use((_, res, next) => { res.type('json'); next(); });
 
-  /* GET name: try SQLite first */
+  /* ---------- LOOK-UP ROUTES ---------- */
+
+  // 1) Get by name (SQLite first, then on-chain)
   app.get('/name/:name', (req, res) => {
     db.get(
       `SELECT name, addr, owner, publickey, signature
-         FROM names WHERE name = ?`,
+       FROM names
+       WHERE name = ?`,
       [req.params.name],
       (err, row) => {
         if (err) console.error('DB lookup error:', err);
         if (row) return res.json(row);
 
-        // fallback to on-chain + cache
         (async () => {
           try {
-            const hex = formatName(req.params.name);
-            const addr = await reg.methods.addr(hex).call();
+            const hex  = formatName(req.params.name);
+            const addr = await reg.methods.addr(hex).call({}, 'latest');
             if (isHashZero(addr)) {
               const cached = cache[req.params.name];
               return cached
                 ? res.json(cached)
                 : res.status(404).json({ error: 'name not registered' });
             }
-            const pub = await reg.methods.publickey(hex).call();
-            const sig = await reg.methods.signature(hex).call();
+            const pub = await reg.methods.publickey(hex).call({}, 'latest');
+            const sig = await reg.methods.signature(hex).call({}, 'latest');
             const obj = isHashZero(pub)
               ? { name: req.params.name, addr }
               : { name: req.params.name, addr, publickey: pub, signature: sig };
@@ -200,46 +201,72 @@ function startServer() {
     );
   });
 
-  /* Other GET routes unchanged … */
+  // 2) Public key
   app.get('/name/:name/publickey', async (req, res) => {
     try {
-      const pub = await reg.methods.publickey(formatName(req.params.name)).call();
+      const pub = await reg.methods
+        .publickey(formatName(req.params.name))
+        .call({}, 'latest');
       if (isHashZero(pub))
         return res.status(404).json({ error: 'name not registered' });
       res.json({ name: req.params.name, publickey: pub });
-    } catch (e) { console.error(e); res.status(500).json({ error: 'server error' }); }
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: 'server error' });
+    }
   });
+
+  // 3) Signature
   app.get('/name/:name/signature', async (req, res) => {
     try {
-      const sig = await reg.methods.signature(formatName(req.params.name)).call();
+      const sig = await reg.methods
+        .signature(formatName(req.params.name))
+        .call({}, 'latest');
       if (isHashZero(sig))
         return res.status(404).json({ error: 'name not registered' });
       res.json({ name: req.params.name, signature: sig });
-    } catch (e) { console.error(e); res.status(500).json({ error: 'server error' }); }
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: 'server error' });
+    }
   });
+
+  // 4) Owner
   app.get('/name/:name/owner', async (req, res) => {
     try {
-      const owner = await reg.methods.owner(req.params.name).call();
+      const owner = await reg.methods
+        .owner(req.params.name)
+        .call({}, 'latest');
       if (isHashZero(owner))
         return res.status(404).json({ error: 'name not registered' });
       res.json({ name: req.params.name, owner });
-    } catch (e) { console.error(e); res.status(500).json({ error: 'server error' }); }
-  });
-  app.get('/addr/:addr', async (req, res) => {
-    try {
-      const addr = formatAddress(req.params.addr);
-      if (!addr) return res.status(400).json({ success: false });
-      const nameHex = await reg.methods.name(addr).call();
-      if (!isHashZero(nameHex))
-        return res.json({ name: parseString(nameHex) });
-      const cached = addrCache[addr];
-      cached
-        ? res.json(cached)
-        : res.status(404).json({ error: 'address not registered' });
-    } catch (e) { console.error(e); res.status(500).json({ error: 'server error' }); }
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: 'server error' });
+    }
   });
 
-  /* POST name: register + persist to SQLite */
+  // 5) Reverse lookup
+  app.get('/addr/:addr', async (req, res) => {
+    try {
+      const addr    = formatAddress(req.params.addr);
+      if (!addr) return res.status(400).json({ success: false });
+
+      const nameHex = await reg.methods.name(addr).call({}, 'latest');
+      if (!isHashZero(nameHex))
+        return res.json({ name: parseString(nameHex) });
+
+      const cached = addrCache[addr];
+      return cached
+        ? res.json(cached)
+        : res.status(404).json({ error: 'address not registered' });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: 'server error' });
+    }
+  });
+
+  /* ---------- REGISTRATION ROUTE ---------- */
   app.post('/name/:name', async (req, res) => {
     try {
       const name  = req.params.name;
@@ -263,19 +290,20 @@ function startServer() {
         signature = req.body.signature;
       }
 
-      const taken = !(await reg.methods.owner(name).call()).match(/^0x0*$/);
+      const taken = !(await reg.methods.owner(name).call({}, 'latest')).match(/^0x0*$/);
       if (taken)
         return res.status(403).json({ success: false, error: 'name already owned' });
 
       console.log(`Registering ${name} → ${addr}`);
-
-      const tx = await reg.methods.reserveFor(
-        formatName(name),
-        owner,
-        addr,
-        publickey,
-        signature
-      ).send({ from: coinbase, gas: 3_000_000 });
+      const tx = await reg.methods
+        .reserveFor(
+          formatName(name),
+          owner,
+          addr,
+          publickey,
+          signature
+        )
+        .send({ from: coinbase, gas: 3_000_000 });
 
       const obj = { name, addr, publickey, signature };
       cache[name]     = obj;
@@ -283,13 +311,15 @@ function startServer() {
 
       res.json({ success: true, tx: tx.transactionHash });
 
-      // write to SQLite
+      // Persist to SQLite
       db.run(
         `INSERT OR REPLACE INTO names
            (name, addr, owner, publickey, signature)
          VALUES (?, ?, ?, ?, ?)`,
         [name, addr, owner, publickey, signature],
-        err => { if (err) console.error('DB insert error:', err); }
+        err => {
+          if (err) console.error('DB insert error:', err);
+        }
       );
     } catch (e) {
       console.error(e);
@@ -297,20 +327,22 @@ function startServer() {
     }
   });
 
-  /* LISTENERS */
+  /* ---------- LISTENERS ---------- */
   http.createServer(app).listen(8080, () => console.log('HTTP  :8080 ready'));
   if (argv.https) {
     try {
       const opts = {
         key : fs.readFileSync('/etc/ssl/private/star_ring_cx.key'),
         cert: fs.readFileSync('/etc/ssl/certs/cert_star_ring_cx.pem'),
-        ca  : fs.readFileSync('/etc/ssl/certs/chain_star_ring_cx.pem','utf8')
-               .split('\n-----END CERTIFICATE-----')
-               .filter(Boolean)
-               .map(c => c + '\n-----END CERTIFICATE-----')
+        ca  : fs.readFileSync('/etc/ssl/certs/chain_star_ring_cx.pem', 'utf8')
+          .split('\n-----END CERTIFICATE-----')
+          .filter(Boolean)
+          .map(c => c + '\n-----END CERTIFICATE-----')
       };
       https.createServer(opts, app).listen(443, () => console.log('HTTPS :443  ready'));
-    } catch (e) { console.error('HTTPS error:', e); }
+    } catch (e) {
+      console.error('HTTPS error:', e);
+    }
   }
 }
 
